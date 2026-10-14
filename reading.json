@@ -1,0 +1,25 @@
+﻿{
+  "schema_version": "1.0",
+  "device_id": "device-001",
+  "external_event_id": "cmd-event-003",
+  "event_timestamp": "2026-10-14T07:59:00Z",
+  "measurements": [
+    {
+      "gas_type": "carbon_monoxide",
+      "value": 12.4,
+      "unit": "ppm",
+      "calibration_status": "calibrated",
+      "measurement_status": "valid",
+      "sensor_channel": "gas-1"
+    }
+  ],
+  "environment": [],
+  "sensor_health": {
+    "status": "healthy",
+    "battery_percent": 87
+  },
+  "data_quality": {
+    "overall": "good",
+    "flags": []
+  }
+}

@@ -1,0 +1,67 @@
+services:
+  # 1. FastAPI Web Service (Reading Ingestion & Health Checks)
+  - type: web
+    name: andromot-api
+    runtime: python
+    buildCommand: pip install -e .
+    startCommand: uvicorn andromot.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health/live
+    autoDeploy: true
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: APP_NAME
+        value: andromot
+      - key: LOG_LEVEL
+        value: INFO
+      - key: LOG_JSON
+        value: true
+      - key: DATABASE_URL
+        sync: false
+      - key: DEVICE_CREDENTIAL_PEPPER
+        sync: false
+      - key: TELEGRAM_ENABLED
+        value: "true"
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: GROQ_ENABLED
+        value: "true"
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: qwen/qwen3.8-27b
+
+  # 2. Background Processing Worker (Consumes pending jobs, runs safety rules, sends Telegram alerts)
+  - type: worker
+    name: andromot-worker
+    runtime: python
+    buildCommand: pip install -e .
+    startCommand: python -m andromot.worker
+    autoDeploy: true
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: APP_NAME
+        value: andromot
+      - key: LOG_LEVEL
+        value: INFO
+      - key: LOG_JSON
+        value: true
+      - key: DATABASE_URL
+        sync: false
+      - key: DEVICE_CREDENTIAL_PEPPER
+        sync: false
+      - key: TELEGRAM_ENABLED
+        value: "true"
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: GROQ_ENABLED
+        value: "true"
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: qwen/qwen3.8-27b

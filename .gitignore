@@ -1,0 +1,35 @@
+# Environment files
+.env
+.env.local
+*.env
+
+# Python Virtual Environments
+.venv/
+venv/
+ENV/
+env/
+
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Testing & Linting
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Build and Packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# IDE & Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
