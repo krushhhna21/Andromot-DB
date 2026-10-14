@@ -73,3 +73,55 @@ async def generate_incident_summary(
     except (httpx.HTTPError, OSError) as exc:
         logger.error("Groq request failed: %s", exc)
         return None
+
+
+async def answer_safety_query(user_query: str) -> str | None:
+    """Generate concise, knowledgeable answer for user safety queries via Groq LLM."""
+    settings = get_settings()
+    if not settings.groq_enabled or not settings.groq_api_key:
+        return None
+
+    api_key = settings.groq_api_key.get_secret_value().strip()
+    if not api_key:
+        return None
+
+    model = settings.groq_model or "qwen/qwen3.8-27b"
+
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are Andromot AI, an industrial gas safety and IoT assistant. "
+                    "Answer user inquiries concisely, accurately, and politely in 2-4 sentences. "
+                    "You know standard safety thresholds: Carbon Monoxide (Warning > 35 ppm, Critical > 100 ppm), "
+                    "Methane (Warning > 500 ppm, Critical > 1000 ppm). "
+                    "Do not use markdown headers (###). Format output cleanly for Telegram messaging."
+                ),
+            },
+            {"role": "user", "content": user_query},
+        ],
+        "max_tokens": 200,
+        "temperature": 0.3,
+    }
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=settings.groq_timeout_seconds) as client:
+            resp = await client.post(GROQ_API_URL, json=payload, headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                choices = data.get("choices", [])
+                if choices:
+                    return choices[0]["message"]["content"].strip()
+            logger.error("Groq API error HTTP %d: %s", resp.status_code, resp.text)
+            return None
+    except (httpx.HTTPError, OSError) as exc:
+        logger.error("Groq safety query request failed: %s", exc)
+        return None
+

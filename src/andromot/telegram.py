@@ -3,16 +3,23 @@
 import argparse
 import asyncio
 import logging
+from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Any
 
 import httpx
+from sqlalchemy import func, select
+from sqlalchemy.orm import selectinload
 
+from .ai import answer_safety_query
 from .config import get_settings
+from .db import get_session_factory
+from .models import Device, ProcessingJob, Reading
 
 logger = logging.getLogger(__name__)
 
 TELEGRAM_API_BASE = "https://api.telegram.org"
+
 
 
 def format_alert_message(
@@ -175,6 +182,223 @@ async def fetch_latest_chat_id() -> tuple[str, str] | None:
     except (httpx.HTTPError, OSError) as exc:
         logger.error("Telegram getUpdates error: %s", exc)
         return None
+
+
+async def _get_status_text() -> str:
+    settings = get_settings()
+    session_factory = get_session_factory()
+    try:
+        async with session_factory() as session:
+            dev_cnt = (await session.execute(select(func.count(Device.id)))).scalar_one()
+            readings_cnt = (await session.execute(select(func.count(Reading.id)))).scalar_one()
+            pending_jobs = (
+                await session.execute(
+                    select(func.count(ProcessingJob.id)).where(ProcessingJob.status == "pending")
+                )
+            ).scalar_one()
+
+        ai_model = settings.groq_model if settings.groq_enabled else "Disabled"
+        return (
+            "🟢 <b>Andromot Platform: Operational</b>\n\n"
+            "• <b>Database:</b> Connected (Neon PostgreSQL)\n"
+            f"• <b>Active Devices:</b> {dev_cnt}\n"
+            f"• <b>Total Readings:</b> {readings_cnt}\n"
+            f"• <b>Pending Ingestion Queue:</b> {pending_jobs}\n"
+            f"• <b>AI Safety Engine:</b> {ai_model}\n"
+            "• <b>Worker Status:</b> Active"
+        )
+    except Exception as exc:
+        logger.exception("Failed to query platform status: %s", exc)
+        return "⚠️ <b>Platform Status: Degraded</b>\n\nDatabase query failed. Please check backend logs."
+
+
+async def _get_latest_telemetry_text() -> str:
+    session_factory = get_session_factory()
+    try:
+        async with session_factory() as session:
+            stmt = (
+                select(Reading)
+                .options(
+                    selectinload(Reading.measurements),
+                    selectinload(Reading.environment_measurements),
+                )
+                .order_by(Reading.event_timestamp.desc())
+                .limit(1)
+            )
+            result = await session.execute(stmt)
+            latest = result.scalar_one_or_none()
+            if latest is None:
+                return (
+                    "ℹ️ <b>No Telemetry Logged Yet</b>\n\n"
+                    "Once an IoT device transmits readings to <code>/api/v1/readings</code>, "
+                    "the latest gas levels will be displayed here."
+                )
+
+            device = await session.get(Device, latest.device_id)
+            dev_name = device.device_id if device else str(latest.device_id)
+
+            ts_str = latest.event_timestamp.strftime("%Y-%m-%d %H:%M:%S UTC")
+            lines = [
+                "📊 <b>Latest Gas Telemetry</b>",
+                f"<b>Device:</b> <code>{dev_name}</code>",
+                f"<b>Timestamp:</b> {ts_str}",
+                "",
+                "<b>Gas Measurements:</b>",
+            ]
+            if latest.measurements:
+                for m in latest.measurements:
+                    cal = f" ({m.calibration_status})" if m.calibration_status else ""
+                    lines.append(f"• <b>{m.gas_type}:</b> {m.value} {m.unit}{cal}")
+            else:
+                lines.append("• <i>No gas measurements recorded</i>")
+
+            if latest.environment_measurements:
+                lines.extend(["", "<b>Environment:</b>"])
+                for em in latest.environment_measurements:
+                    lines.append(f"• <b>{em.measurement_type}:</b> {em.value} {em.unit}")
+
+            health = latest.sensor_health or {}
+            if health:
+                status = health.get("status", "healthy")
+                battery = health.get("battery_percent")
+                batt_str = f" (Battery: {battery}%)" if battery is not None else ""
+                lines.extend(["", f"<b>Sensor Health:</b> {status}{batt_str}"])
+
+            return "\n".join(lines)
+    except Exception as exc:
+        logger.exception("Failed to query latest telemetry: %s", exc)
+        return "⚠️ Could not retrieve latest telemetry. Database may be busy."
+
+
+async def _get_devices_text() -> str:
+    session_factory = get_session_factory()
+    try:
+        async with session_factory() as session:
+            stmt = select(Device).order_by(Device.created_at.asc())
+            devices = (await session.execute(stmt)).scalars().all()
+            if not devices:
+                return "ℹ️ No devices registered yet."
+            lines = ["📟 <b>Registered IoT Devices:</b>", ""]
+            for d in devices:
+                created = d.created_at.strftime("%Y-%m-%d") if d.created_at else "N/A"
+                lines.append(f"• <code>{d.device_id}</code> | Status: <b>{d.status}</b> | Registered: {created}")
+            return "\n".join(lines)
+    except Exception as exc:
+        logger.exception("Failed to query devices: %s", exc)
+        return "⚠️ Could not retrieve devices list."
+
+
+async def handle_incoming_telegram_message(message: dict[str, Any]) -> None:
+    """Process an incoming interactive message from Telegram and send an appropriate response."""
+    chat = message.get("chat", {})
+    chat_id = str(chat.get("id"))
+    text = (message.get("text") or message.get("caption") or "").strip()
+    if not text:
+        await send_telegram_message(
+            "I received your media! Send <code>/help</code> to view available commands.",
+            chat_id=chat_id,
+        )
+        return
+
+    first_name = chat.get("first_name", "there")
+    cmd = text.split()[0].lower() if text.startswith("/") else text.lower()
+
+    if cmd in ("/start", "/help", "help", "hi", "hello", "ii", "hiii", "hey"):
+        reply = (
+            f"👋 Hello <b>{first_name}</b>!\n\n"
+            "I am the <b>Andromot IoT Safety Bot</b>. I monitor industrial gas levels in real-time "
+            "and alert you immediately if hazards (CO, Methane, etc.) are detected.\n\n"
+            "<b>Available Commands:</b>\n"
+            "• <code>/status</code> — System & database health\n"
+            "• <code>/latest</code> — Latest sensor telemetry & gas readings\n"
+            "• <code>/devices</code> — Registered sensor devices\n"
+            "• <code>/help</code> — Show this menu\n\n"
+            "💡 <i>You can also ask me any safety question (e.g. 'What is the safe limit for CO?') and our Groq AI will assist you!</i>"
+        )
+        await send_telegram_message(reply, chat_id=chat_id)
+        return
+
+    if cmd == "/status":
+        status_text = await _get_status_text()
+        await send_telegram_message(status_text, chat_id=chat_id)
+        return
+
+    if cmd == "/latest":
+        telemetry_text = await _get_latest_telemetry_text()
+        await send_telegram_message(telemetry_text, chat_id=chat_id)
+        return
+
+    if cmd == "/devices":
+        devices_text = await _get_devices_text()
+        await send_telegram_message(devices_text, chat_id=chat_id)
+        return
+
+    # Freeform question or text: invoke Groq AI
+    ai_answer = await answer_safety_query(text)
+    if ai_answer:
+        await send_telegram_message(ai_answer, chat_id=chat_id)
+    else:
+        await send_telegram_message(
+            f"Received: \"{text}\"\n\nType <code>/help</code> for commands or <code>/latest</code> to see sensor readings.",
+            chat_id=chat_id,
+        )
+
+
+async def poll_telegram_updates(stop_event: asyncio.Event | None = None) -> None:
+    """Long-polling worker that listens for incoming Telegram messages and dispatches responses."""
+    settings = get_settings()
+    if not settings.telegram_enabled or not settings.telegram_bot_token:
+        logger.info("Telegram polling skipped (disabled or no token configured)")
+        return
+
+    token = settings.telegram_bot_token.get_secret_value().strip()
+    if not token:
+        logger.info("Telegram polling skipped (empty token)")
+        return
+
+    # Delete any existing webhook to prevent polling conflicts
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            await client.post(f"{TELEGRAM_API_BASE}/bot{token}/deleteWebhook")
+    except Exception as exc:
+        logger.debug("deleteWebhook error (non-fatal): %s", exc)
+
+    offset = 0
+    logger.info("Telegram bot polling started")
+
+    while stop_event is None or not stop_event.is_set():
+        try:
+            url = f"{TELEGRAM_API_BASE}/bot{token}/getUpdates"
+            params = {"offset": offset, "timeout": 20}
+            async with httpx.AsyncClient(timeout=35.0) as client:
+                resp = await client.get(url, params=params)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    updates = data.get("result", [])
+                    for update in updates:
+                        offset = max(offset, update.get("update_id", 0) + 1)
+                        msg = update.get("message")
+                        if msg:
+                            try:
+                                await handle_incoming_telegram_message(msg)
+                            except Exception as exc:
+                                logger.exception("Error handling Telegram message: %s", exc)
+                elif resp.status_code == 409:
+                    logger.warning("Telegram polling conflict (409). Backing off 5s...")
+                    await asyncio.sleep(5)
+                else:
+                    logger.warning("Telegram getUpdates HTTP %d: %s", resp.status_code, resp.text)
+                    await asyncio.sleep(3)
+        except asyncio.CancelledError:
+            logger.info("Telegram bot polling stopped (cancelled)")
+            break
+        except (httpx.HTTPError, OSError) as exc:
+            logger.debug("Telegram polling network glitch: %s", exc)
+            await asyncio.sleep(2)
+        except Exception as exc:
+            logger.exception("Unexpected error in Telegram polling loop: %s", exc)
+            await asyncio.sleep(3)
+
 
 
 def main() -> None:

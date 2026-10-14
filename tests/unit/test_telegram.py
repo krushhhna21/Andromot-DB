@@ -154,3 +154,84 @@ async def test_get_bot_info_success(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert info is not None
     assert info["username"] == "andromot_bot"
+
+
+@pytest.mark.asyncio
+async def test_handle_incoming_start_command() -> None:
+    mock_send = AsyncMock(return_value=True)
+    msg = {"chat": {"id": 6810624345, "first_name": "Krushna"}, "text": "/start"}
+
+    with patch("andromot.telegram.send_telegram_message", mock_send):
+        from andromot.telegram import handle_incoming_telegram_message
+        await handle_incoming_telegram_message(msg)
+
+    assert mock_send.await_count == 1
+    args, kwargs = mock_send.call_args
+    assert "Andromot IoT Safety Bot" in args[0]
+    assert kwargs["chat_id"] == "6810624345"
+
+
+@pytest.mark.asyncio
+async def test_handle_incoming_greeting_ii() -> None:
+    mock_send = AsyncMock(return_value=True)
+    msg = {"chat": {"id": 6810624345, "first_name": "Krushna"}, "text": "ii"}
+
+    with patch("andromot.telegram.send_telegram_message", mock_send):
+        from andromot.telegram import handle_incoming_telegram_message
+        await handle_incoming_telegram_message(msg)
+
+    assert mock_send.await_count == 1
+    args, kwargs = mock_send.call_args
+    assert "Hello <b>Krushna</b>!" in args[0]
+    assert kwargs["chat_id"] == "6810624345"
+
+
+@pytest.mark.asyncio
+async def test_handle_incoming_status_command() -> None:
+    mock_send = AsyncMock(return_value=True)
+    msg = {"chat": {"id": 6810624345}, "text": "/status"}
+
+    with patch("andromot.telegram.send_telegram_message", mock_send):
+        with patch("andromot.telegram._get_status_text", AsyncMock(return_value="🟢 Operational")):
+            from andromot.telegram import handle_incoming_telegram_message
+            await handle_incoming_telegram_message(msg)
+
+    assert mock_send.await_count == 1
+    args, kwargs = mock_send.call_args
+    assert "🟢 Operational" in args[0]
+
+
+@pytest.mark.asyncio
+async def test_handle_incoming_freeform_ai() -> None:
+    mock_send = AsyncMock(return_value=True)
+    mock_ai = AsyncMock(return_value="Carbon monoxide is dangerous above 35 ppm.")
+    msg = {"chat": {"id": 6810624345}, "text": "is 40 ppm CO safe?"}
+
+    with patch("andromot.telegram.send_telegram_message", mock_send):
+        with patch("andromot.telegram.answer_safety_query", mock_ai):
+            from andromot.telegram import handle_incoming_telegram_message
+            await handle_incoming_telegram_message(msg)
+
+    assert mock_ai.await_count == 1
+    assert mock_send.await_count == 1
+    args, kwargs = mock_send.call_args
+    assert "Carbon monoxide is dangerous" in args[0]
+
+
+@pytest.mark.asyncio
+async def test_poll_telegram_updates_graceful_stop(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+    monkeypatch.setenv("TELEGRAM_ENABLED", "true")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:fake-token")
+    get_settings.cache_clear()
+
+    stop_event = asyncio.Event()
+    stop_event.set()  # Stop immediately
+
+    mock_resp = httpx.Response(200, json={"ok": True, "result": []})
+    mock_post = AsyncMock(return_value=mock_resp)
+
+    with patch.object(httpx.AsyncClient, "post", mock_post):
+        from andromot.telegram import poll_telegram_updates
+        await poll_telegram_updates(stop_event=stop_event)
+

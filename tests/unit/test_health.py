@@ -17,3 +17,15 @@ def test_readiness() -> None:
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_root() -> None:
+    with TestClient(app) as client:
+        response = client.get("/")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["service"] == "Andromot IoT Platform"
+    assert data["status"] == "online"
+    assert data["docs"] == "/docs"
+

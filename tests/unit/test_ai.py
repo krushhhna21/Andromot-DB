@@ -3,8 +3,9 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from andromot.ai import generate_incident_summary
+from andromot.ai import answer_safety_query, generate_incident_summary
 from andromot.config import get_settings
+
 
 
 @pytest.mark.asyncio
@@ -44,3 +45,37 @@ async def test_generate_incident_summary_success(monkeypatch: pytest.MonkeyPatch
     assert mock_post.await_count == 1
     _, kwargs = mock_post.call_args
     assert kwargs["json"]["model"] == "qwen/qwen3.8-27b"
+
+
+@pytest.mark.asyncio
+async def test_answer_safety_query_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GROQ_ENABLED", "false")
+    get_settings.cache_clear()
+
+    res = await answer_safety_query("What is safe level of CO?")
+    assert res is None
+
+
+@pytest.mark.asyncio
+async def test_answer_safety_query_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GROQ_ENABLED", "true")
+    monkeypatch.setenv("GROQ_API_KEY", "fake-key")
+    monkeypatch.setenv("GROQ_MODEL", "qwen/qwen3.8-27b")
+    get_settings.cache_clear()
+
+    mock_resp = httpx.Response(
+        200,
+        json={
+            "choices": [
+                {"message": {"content": "Normal CO is below 9 ppm. Exposure above 35 ppm requires ventilation."}}
+            ]
+        },
+    )
+    mock_post = AsyncMock(return_value=mock_resp)
+
+    with patch.object(httpx.AsyncClient, "post", mock_post):
+        res = await answer_safety_query("What is safe level of CO?")
+
+    assert res == "Normal CO is below 9 ppm. Exposure above 35 ppm requires ventilation."
+    assert mock_post.await_count == 1
+
