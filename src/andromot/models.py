@@ -45,8 +45,9 @@ class Measurement(Base):
 
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
     reading_id: Mapped[UUID] = mapped_column(ForeignKey("readings.id", ondelete="CASCADE"), index=True)
-    gas_type: Mapped[str] = mapped_column(String(128))
+    gas_type: Mapped[str] = mapped_column(String(128), index=True)
     value: Mapped[Decimal] = mapped_column(Numeric(24, 8))
+
     unit: Mapped[str] = mapped_column(String(64))
     calibration_status: Mapped[str] = mapped_column(String(32))
     measurement_status: Mapped[str] = mapped_column(String(32))

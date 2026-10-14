@@ -38,7 +38,11 @@ CREATE TABLE IF NOT EXISTS measurements (
     sensor_channel VARCHAR(128)
 );
 
+CREATE INDEX IF NOT EXISTS ix_measurements_gas_type
+    ON measurements (gas_type);
+
 CREATE TABLE IF NOT EXISTS environment_measurements (
+
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     reading_id UUID NOT NULL REFERENCES readings(id) ON DELETE CASCADE,
     measurement_type VARCHAR(64) NOT NULL,

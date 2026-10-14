@@ -399,3 +399,63 @@ def test_database_rollback_on_commit_failure(test_device: Device, valid_payload:
         assert session.rolled_back is True
     finally:
         app.dependency_overrides.clear()
+
+
+def test_list_target_gases() -> None:
+    with TestClient(app) as client:
+        response = client.get("/api/v1/gases")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "target_gases" in data
+    assert len(data["target_gases"]) == 8
+    keys = [g["key"] for g in data["target_gases"]]
+    assert "lpg" in keys
+    assert "methane" in keys
+    assert "propane" in keys
+    assert "butane" in keys
+    assert "hydrogen" in keys
+    assert "alcohol" in keys
+    assert "carbon_monoxide" in keys
+    assert "smoke" in keys
+
+
+def test_ingest_all_eight_target_gases_minimal(test_device: Device) -> None:
+    session = FakeAsyncSession(devices=[test_device])
+
+    async def override_get_db_session():
+        yield session
+
+    app.dependency_overrides[get_db_session] = override_get_db_session
+    try:
+        payload = {
+            "device_id": "device-001",
+            "event_timestamp": datetime.now(UTC).isoformat(),
+            "measurements": [
+                {"gas_type": "lpg", "value": 450.0},
+                {"gas_type": "methane", "value": 350.0},
+                {"gas_type": "propane", "value": 280.0},
+                {"gas_type": "butane", "value": 210.0},
+                {"gas_type": "hydrogen", "value": 150.0},
+                {"gas_type": "alcohol", "value": 45.0},
+                {"gas_type": "carbon_monoxide", "value": 8.5},
+                {"gas_type": "smoke", "value": 60.0},
+            ],
+        }
+        headers = {"Authorization": "Bearer device-001.test-secret"}
+        with TestClient(app) as client:
+            response = client.post("/api/v1/readings", json=payload, headers=headers)
+
+        assert response.status_code == 202
+        data = response.json()
+        assert data["status"] == "accepted"
+        assert data["duplicate"] is False
+        assert len(session.added) == 1
+        r = session.added[0]
+        assert len(r.measurements) == 8
+        assert all(m.calibration_status == "calibrated" for m in r.measurements)
+        assert all(m.measurement_status == "valid" for m in r.measurements)
+        assert all(m.unit == "ppm" for m in r.measurements)
+    finally:
+        app.dependency_overrides.clear()
+
