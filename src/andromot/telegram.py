@@ -306,16 +306,42 @@ async def handle_incoming_telegram_message(message: dict[str, Any]) -> None:
     if cmd in ("/start", "/help", "help", "hi", "hello", "ii", "hiii", "hey"):
         reply = (
             f"👋 Hello <b>{first_name}</b>!\n\n"
-            "I am the <b>Andromot IoT Safety Bot</b>. I monitor industrial gas levels in real-time "
-            "and alert you immediately if hazards (CO, Methane, etc.) are detected.\n\n"
+            "I am the <b>Andromot IoT Safety Bot</b>. I monitor 8 hazardous gas channels in real-time "
+            "(LPG, Methane, Propane, Butane, Hydrogen, Alcohol, Carbon Monoxide, Smoke) "
+            "and alert you immediately if emergency thresholds are breached.\n\n"
             "<b>Available Commands:</b>\n"
             "• <code>/status</code> — System & database health\n"
             "• <code>/latest</code> — Latest sensor telemetry & gas readings\n"
-            "• <code>/devices</code> — Registered sensor devices\n"
+            "• <code>/gases</code> — Safety limits & thresholds for all 8 gases\n"
+            "• <code>/devices</code> — Registered sensor hardware\n"
             "• <code>/help</code> — Show this menu\n\n"
-            "💡 <i>You can also ask me any safety question (e.g. 'What is the safe limit for CO?') and our Groq AI will assist you!</i>"
+            "💡 <i>You can also ask me any safety question (e.g. 'What are the dangers of hydrogen leak?') and our Groq AI will assist!</i>"
         )
         await send_telegram_message(reply, chat_id=chat_id)
+        return
+
+    if cmd in ("/gases", "/thresholds"):
+        gases_text = (
+            "🧪 <b>Target Gases & Alarm Thresholds:</b>\n\n"
+            "• <b>Carbon Monoxide (CO):</b>\n"
+            "  ⚠️ Warning: ≥ 35 ppm | 🚨 Critical: ≥ 100 ppm\n\n"
+            "• <b>LPG (Propane/Butane):</b>\n"
+            "  ⚠️ Warning: ≥ 10% LEL (1000 ppm) | 🚨 Critical: ≥ 20% LEL (2000 ppm)\n\n"
+            "• <b>Methane (CH4):</b>\n"
+            "  ⚠️ Warning: ≥ 10% LEL (1000 ppm) | 🚨 Critical: ≥ 20% LEL (2500 ppm)\n\n"
+            "• <b>Propane (C3H8):</b>\n"
+            "  ⚠️ Warning: ≥ 10% LEL (1000 ppm) | 🚨 Critical: ≥ 20% LEL (2000 ppm)\n\n"
+            "• <b>Butane (C4H10):</b>\n"
+            "  ⚠️ Warning: ≥ 10% LEL (1000 ppm) | 🚨 Critical: ≥ 20% LEL (1800 ppm)\n\n"
+            "• <b>Hydrogen (H2):</b>\n"
+            "  ⚠️ Warning: ≥ 10% LEL (1000 ppm) | 🚨 Critical: ≥ 20% LEL (4000 ppm)\n\n"
+            "• <b>Alcohol / Ethanol:</b>\n"
+            "  ⚠️ Warning: ≥ 200 ppm | 🚨 Critical: ≥ 500 ppm\n\n"
+            "• <b>Smoke:</b>\n"
+            "  ⚠️ Warning: ≥ 200 ppm | 🚨 Critical: ≥ 400 ppm\n\n"
+            "<i>Deterministic rules evaluate each measurement immediately upon ingestion.</i>"
+        )
+        await send_telegram_message(gases_text, chat_id=chat_id)
         return
 
     if cmd == "/status":
@@ -327,6 +353,7 @@ async def handle_incoming_telegram_message(message: dict[str, Any]) -> None:
         telemetry_text = await _get_latest_telemetry_text()
         await send_telegram_message(telemetry_text, chat_id=chat_id)
         return
+
 
     if cmd == "/devices":
         devices_text = await _get_devices_text()

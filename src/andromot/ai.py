@@ -94,17 +94,23 @@ async def answer_safety_query(user_query: str) -> str | None:
                 "role": "system",
                 "content": (
                     "You are Andromot AI, an industrial gas safety and IoT assistant. "
+                    "You monitor 8 target hazardous gases: LPG, Methane, Propane, Butane, Hydrogen, Alcohol/Ethanol, "
+                    "Carbon Monoxide, and Smoke. "
+                    "Standard thresholds:\n"
+                    "- Carbon Monoxide: Warning > 35 ppm, Critical > 100 ppm (toxic asphyxiant)\n"
+                    "- LPG, Propane, Butane, Methane, Hydrogen: Warning > 10% LEL (or >1000 ppm), Critical > 20% LEL (explosion risk)\n"
+                    "- Alcohol/Ethanol: Warning > 200 ppm, Critical > 500 ppm (VOC vapor)\n"
+                    "- Smoke: Warning > 200 ppm/index, Critical > 400 ppm/index (fire/combustion)\n"
                     "Answer user inquiries concisely, accurately, and politely in 2-4 sentences. "
-                    "You know standard safety thresholds: Carbon Monoxide (Warning > 35 ppm, Critical > 100 ppm), "
-                    "Methane (Warning > 500 ppm, Critical > 1000 ppm). "
                     "Do not use markdown headers (###). Format output cleanly for Telegram messaging."
                 ),
             },
             {"role": "user", "content": user_query},
         ],
-        "max_tokens": 200,
+        "max_tokens": 250,
         "temperature": 0.3,
     }
+
 
     headers = {
         "Authorization": f"Bearer {api_key}",

@@ -202,6 +202,25 @@ async def test_handle_incoming_status_command() -> None:
 
 
 @pytest.mark.asyncio
+async def test_handle_incoming_gases_command() -> None:
+    mock_send = AsyncMock(return_value=True)
+    msg = {"chat": {"id": 6810624345}, "text": "/gases"}
+
+    with patch("andromot.telegram.send_telegram_message", mock_send):
+        from andromot.telegram import handle_incoming_telegram_message
+        await handle_incoming_telegram_message(msg)
+
+    assert mock_send.await_count == 1
+    args, kwargs = mock_send.call_args
+    assert "Target Gases & Alarm Thresholds" in args[0]
+    assert "LPG" in args[0]
+    assert "Hydrogen" in args[0]
+    assert "Smoke" in args[0]
+    assert "Alcohol" in args[0]
+
+
+
+@pytest.mark.asyncio
 async def test_handle_incoming_freeform_ai() -> None:
     mock_send = AsyncMock(return_value=True)
     mock_ai = AsyncMock(return_value="Carbon monoxide is dangerous above 35 ppm.")
