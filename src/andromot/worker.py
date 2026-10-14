@@ -12,8 +12,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from .ai import generate_incident_summary
+from .config import get_settings
 from .db import get_session_factory
-from .models import ProcessingJob, Reading
+from .models import Device, DeviceSubscriber, ProcessingJob, Reading
 from .safety import evaluate_reading_safety
 from .telegram import format_alert_message, send_telegram_message
 
@@ -43,20 +44,42 @@ async def default_processor(reading_id: UUID) -> None:
         )
 
         if level in ("WARNING", "CRITICAL"):
+            device = await session.get(Device, reading.device_id)
+            device_str_id = device.device_id if device else str(reading.device_id)
+
             ai_summary = await generate_incident_summary(
-                device_id=str(reading.device_id),
+                device_id=device_str_id,
                 level=level,
                 measurements=breaches or reading.measurements,
             )
             alert_text = format_alert_message(
-                device_id=str(reading.device_id),
+                device_id=device_str_id,
                 level=level,
                 measurements=reading.measurements,
                 event_timestamp=reading.event_timestamp,
                 sensor_health=reading.sensor_health,
                 summary=ai_summary,
             )
-            await send_telegram_message(alert_text)
+
+            # Query all dynamic subscribers for this device
+            subscribers_stmt = select(DeviceSubscriber.telegram_chat_id).where(
+                DeviceSubscriber.device_id == device_str_id
+            )
+            subs = (await session.execute(subscribers_stmt)).scalars().all()
+
+            recipients = {s.strip() for s in subs if s and s.strip()}
+            settings = get_settings()
+            if settings.telegram_chat_id:
+                recipients.add(str(settings.telegram_chat_id).strip())
+
+            if not recipients:
+                logger.warning("No Telegram recipients found for device %s alert", device_str_id)
+            else:
+                for target_chat in recipients:
+                    try:
+                        await send_telegram_message(alert_text, chat_id=target_chat)
+                    except Exception as exc:
+                        logger.error("Failed to send alert to Telegram chat %s: %s", target_chat, exc)
 
 
 

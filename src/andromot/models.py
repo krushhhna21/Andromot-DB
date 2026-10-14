@@ -74,3 +74,15 @@ class ProcessingJob(Base):
     attempt_count: Mapped[int] = mapped_column(default=0)
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class DeviceSubscriber(Base):
+    __tablename__ = "device_subscribers"
+    __table_args__ = (UniqueConstraint("device_id", "telegram_chat_id"),)
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    device_id: Mapped[str] = mapped_column(String(128), index=True)
+    telegram_chat_id: Mapped[str] = mapped_column(String(64), index=True)
+    user_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+

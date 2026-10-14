@@ -8,13 +8,15 @@ from datetime import UTC, datetime
 from typing import Any
 
 import httpx
-from sqlalchemy import func, select
+from uuid import uuid4
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import selectinload
 
 from .ai import answer_safety_query
 from .config import get_settings
 from .db import get_session_factory
-from .models import Device, ProcessingJob, Reading
+from .models import Device, DeviceSubscriber, ProcessingJob, Reading
+
 
 logger = logging.getLogger(__name__)
 
@@ -290,6 +292,93 @@ async def _get_devices_text() -> str:
         return "⚠️ Could not retrieve devices list."
 
 
+async def _subscribe_device(chat_id: str, user_name: str | None, device_id: str | None) -> str:
+    session_factory = get_session_factory()
+    try:
+        async with session_factory() as session:
+            # If no device_id specified, find registered devices
+            if not device_id:
+                devices = (await session.execute(select(Device).where(Device.status == "active"))).scalars().all()
+                if not devices:
+                    return "ℹ️ No active devices registered to subscribe to."
+                if len(devices) == 1:
+                    target_device = devices[0].device_id
+                else:
+                    dev_list = ", ".join(f"<code>{d.device_id}</code>" for d in devices)
+                    return f"Please specify which device to subscribe to:\nUsage: <code>/subscribe &lt;device_id&gt;</code>\n\nAvailable devices: {dev_list}"
+            else:
+                target_device = device_id.strip()
+                dev = await session.scalar(select(Device).where(Device.device_id == target_device))
+                if dev is None:
+                    return f"⚠️ Device <code>{target_device}</code> not found in platform registry. Send <code>/devices</code> to see valid devices."
+
+            # Check existing subscription
+            existing = await session.scalar(
+                select(DeviceSubscriber).where(
+                    DeviceSubscriber.device_id == target_device,
+                    DeviceSubscriber.telegram_chat_id == chat_id,
+                )
+            )
+            if existing is not None:
+                return f"ℹ️ You are already subscribed to alerts for <code>{target_device}</code>!"
+
+            sub = DeviceSubscriber(
+                id=uuid4(),
+                device_id=target_device,
+                telegram_chat_id=chat_id,
+                user_name=user_name,
+            )
+            session.add(sub)
+            await session.commit()
+            return (
+                f"✅ <b>Successfully Subscribed!</b>\n\n"
+                f"This chat (<code>{chat_id}</code>) is now registered to receive real-time emergency & warning alerts for device <code>{target_device}</code>.\n\n"
+                "Type <code>/subscriptions</code> to manage your alert feeds."
+            )
+    except Exception as exc:
+        logger.exception("Subscription error: %s", exc)
+        return "⚠️ Failed to save subscription. Please try again later."
+
+
+async def _unsubscribe_device(chat_id: str, device_id: str | None) -> str:
+    session_factory = get_session_factory()
+    try:
+        async with session_factory() as session:
+            stmt = delete(DeviceSubscriber).where(DeviceSubscriber.telegram_chat_id == chat_id)
+            if device_id:
+                stmt = stmt.where(DeviceSubscriber.device_id == device_id.strip())
+            result = await session.execute(stmt)
+            await session.commit()
+            if result.rowcount > 0:
+                target_str = f"<code>{device_id.strip()}</code>" if device_id else "all devices"
+                return f"🗑️ <b>Unsubscribed!</b> You will no longer receive alerts for {target_str}."
+            return "ℹ️ You had no active subscriptions to remove."
+    except Exception as exc:
+        logger.exception("Unsubscribe error: %s", exc)
+        return "⚠️ Failed to unsubscribe. Please try again."
+
+
+async def _get_subscriptions_text(chat_id: str) -> str:
+    session_factory = get_session_factory()
+    try:
+        async with session_factory() as session:
+            subs = (
+                await session.execute(
+                    select(DeviceSubscriber).where(DeviceSubscriber.telegram_chat_id == chat_id)
+                )
+            ).scalars().all()
+            if not subs:
+                return "ℹ️ You have no active device subscriptions in this chat.\n\nType <code>/subscribe</code> to link to sensor alerts."
+            lines = ["🔔 <b>Your Active Device Subscriptions:</b>", ""]
+            for s in subs:
+                lines.append(f"• <code>{s.device_id}</code> (Alerts active)")
+            lines.extend(["", "To stop alerts, send: <code>/unsubscribe &lt;device_id&gt;</code>"])
+            return "\n".join(lines)
+    except Exception as exc:
+        logger.exception("Get subscriptions error: %s", exc)
+        return "⚠️ Could not retrieve subscriptions."
+
+
 async def handle_incoming_telegram_message(message: dict[str, Any]) -> None:
     """Process an incoming interactive message from Telegram and send an appropriate response."""
     chat = message.get("chat", {})
@@ -318,11 +407,15 @@ async def handle_incoming_telegram_message(message: dict[str, Any]) -> None:
             "• <code>/latest</code> — Latest sensor telemetry & gas readings\n"
             "• <code>/gases</code> — Safety limits & thresholds for all 8 gases\n"
             "• <code>/devices</code> — Registered sensor hardware\n"
+            "• <code>/subscribe &lt;device_id&gt;</code> — Link this chat to receive device alerts\n"
+            "• <code>/unsubscribe</code> — Stop receiving alerts in this chat\n"
+            "• <code>/subscriptions</code> — View your active alert feeds\n"
             "• <code>/help</code> — Show this menu\n\n"
             "💡 <i>You can also ask me any safety question (e.g. 'What are the dangers of hydrogen leak?') and our Groq AI will assist!</i>"
         )
         await send_telegram_message(reply, chat_id=chat_id)
         return
+
 
     # 2. Latest Telemetry (supports /latest or natural English inquiries)
     if cmd == "/latest" or any(p in norm_text for p in (
@@ -374,7 +467,29 @@ async def handle_incoming_telegram_message(message: dict[str, Any]) -> None:
         await send_telegram_message(devices_text, chat_id=chat_id)
         return
 
-    # 6. Freeform question or text: invoke Groq AI with live telemetry context
+    # 6. Subscribe to alerts
+    if cmd == "/subscribe" or norm_text.startswith("/subscribe") or (cmd == "subscribe" and len(norm_text.split()) <= 2):
+        parts = text.split()
+        req_dev = parts[1] if len(parts) > 1 else None
+        res = await _subscribe_device(chat_id, first_name, req_dev)
+        await send_telegram_message(res, chat_id=chat_id)
+        return
+
+    # 7. Unsubscribe from alerts
+    if cmd == "/unsubscribe" or norm_text.startswith("/unsubscribe") or (cmd == "unsubscribe" and len(norm_text.split()) <= 2):
+        parts = text.split()
+        req_dev = parts[1] if len(parts) > 1 else None
+        res = await _unsubscribe_device(chat_id, req_dev)
+        await send_telegram_message(res, chat_id=chat_id)
+        return
+
+    # 8. View Subscriptions
+    if cmd in ("/subscriptions", "/mysubscriptions") or any(p in norm_text for p in ("my subscriptions", "show subscriptions", "list subscriptions")):
+        res = await _get_subscriptions_text(chat_id)
+        await send_telegram_message(res, chat_id=chat_id)
+        return
+
+    # 9. Freeform question or text: invoke Groq AI with live telemetry context
     try:
         telemetry_context = await _get_latest_telemetry_text()
     except Exception:

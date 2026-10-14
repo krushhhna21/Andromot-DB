@@ -65,6 +65,19 @@ CREATE TABLE IF NOT EXISTS processing_jobs (
 CREATE INDEX IF NOT EXISTS ix_processing_jobs_pending
     ON processing_jobs (status, available_at);
 
+CREATE TABLE IF NOT EXISTS device_subscribers (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    device_id VARCHAR(128) NOT NULL,
+    telegram_chat_id VARCHAR(64) NOT NULL,
+    user_name VARCHAR(128),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(device_id, telegram_chat_id)
+);
+
+CREATE INDEX IF NOT EXISTS ix_device_subscribers_device ON device_subscribers (device_id);
+CREATE INDEX IF NOT EXISTS ix_device_subscribers_chat ON device_subscribers (telegram_chat_id);
+
+
 -- Create a device after hashing its credential with the configured pepper.
 -- The API expects: Authorization: Bearer <device_id>.<secret>
 -- Store only HMAC-SHA256(DEVICE_CREDENTIAL_PEPPER, full bearer credential).

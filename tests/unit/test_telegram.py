@@ -254,3 +254,126 @@ async def test_poll_telegram_updates_graceful_stop(monkeypatch: pytest.MonkeyPat
         from andromot.telegram import poll_telegram_updates
         await poll_telegram_updates(stop_event=stop_event)
 
+
+@pytest.mark.asyncio
+async def test_handle_incoming_subscribe_command() -> None:
+    mock_send = AsyncMock(return_value=True)
+    msg = {"chat": {"id": 6810624345, "first_name": "Krushna"}, "text": "/subscribe device-001"}
+
+    with (
+        patch("andromot.telegram.send_telegram_message", mock_send),
+        patch("andromot.telegram._subscribe_device", AsyncMock(return_value="✅ Successfully Subscribed!")) as mock_sub,
+    ):
+        from andromot.telegram import handle_incoming_telegram_message
+        await handle_incoming_telegram_message(msg)
+
+    mock_sub.assert_awaited_once_with("6810624345", "Krushna", "device-001")
+    assert mock_send.await_count == 1
+    args, kwargs = mock_send.call_args
+    assert "✅ Successfully Subscribed!" in args[0]
+    assert kwargs["chat_id"] == "6810624345"
+
+
+@pytest.mark.asyncio
+async def test_handle_incoming_unsubscribe_command() -> None:
+    mock_send = AsyncMock(return_value=True)
+    msg = {"chat": {"id": 6810624345}, "text": "/unsubscribe"}
+
+    with (
+        patch("andromot.telegram.send_telegram_message", mock_send),
+        patch("andromot.telegram._unsubscribe_device", AsyncMock(return_value="🗑️ Unsubscribed!")) as mock_unsub,
+    ):
+        from andromot.telegram import handle_incoming_telegram_message
+        await handle_incoming_telegram_message(msg)
+
+    mock_unsub.assert_awaited_once_with("6810624345", None)
+    assert mock_send.await_count == 1
+    args, kwargs = mock_send.call_args
+    assert "🗑️ Unsubscribed!" in args[0]
+
+
+@pytest.mark.asyncio
+async def test_handle_incoming_subscriptions_command() -> None:
+    mock_send = AsyncMock(return_value=True)
+    msg = {"chat": {"id": 6810624345}, "text": "/subscriptions"}
+
+    with (
+        patch("andromot.telegram.send_telegram_message", mock_send),
+        patch("andromot.telegram._get_subscriptions_text", AsyncMock(return_value="🔔 Active Subscriptions")) as mock_get_sub,
+    ):
+        from andromot.telegram import handle_incoming_telegram_message
+        await handle_incoming_telegram_message(msg)
+
+    mock_get_sub.assert_awaited_once_with("6810624345")
+    assert mock_send.await_count == 1
+    args, kwargs = mock_send.call_args
+    assert "🔔 Active Subscriptions" in args[0]
+
+
+@pytest.mark.asyncio
+async def test_subscribe_device_auto_select_single() -> None:
+    from unittest.mock import MagicMock
+    session = AsyncMock()
+    session.add = MagicMock()
+    mock_dev = MagicMock(device_id="device-001")
+    devices_res = MagicMock()
+    devices_res.scalars.return_value.all.return_value = [mock_dev]
+    session.execute.return_value = devices_res
+    session.scalar.return_value = None
+
+    session_factory = MagicMock()
+    session_ctx = AsyncMock()
+    session_ctx.__aenter__.return_value = session
+    session_ctx.__aexit__.return_value = None
+    session_factory.return_value = session_ctx
+
+    with patch("andromot.telegram.get_session_factory", return_value=session_factory):
+        from andromot.telegram import _subscribe_device
+        res = await _subscribe_device("6810624345", "Krushna", None)
+
+    assert "Successfully Subscribed" in res
+    assert "device-001" in res
+    session.add.assert_called_once()
+    session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_subscribe_device_already_subscribed() -> None:
+    from unittest.mock import MagicMock
+    session = AsyncMock()
+    mock_dev = MagicMock(device_id="device-001")
+    session.scalar.side_effect = [mock_dev, MagicMock()]
+
+    session_factory = MagicMock()
+    session_ctx = AsyncMock()
+    session_ctx.__aenter__.return_value = session
+    session_ctx.__aexit__.return_value = None
+    session_factory.return_value = session_ctx
+
+    with patch("andromot.telegram.get_session_factory", return_value=session_factory):
+        from andromot.telegram import _subscribe_device
+        res = await _subscribe_device("6810624345", "Krushna", "device-001")
+
+    assert "already subscribed" in res
+
+
+@pytest.mark.asyncio
+async def test_unsubscribe_device() -> None:
+    from unittest.mock import MagicMock
+    session = AsyncMock()
+    mock_result = MagicMock(rowcount=1)
+    session.execute.return_value = mock_result
+
+    session_factory = MagicMock()
+    session_ctx = AsyncMock()
+    session_ctx.__aenter__.return_value = session
+    session_ctx.__aexit__.return_value = None
+    session_factory.return_value = session_ctx
+
+    with patch("andromot.telegram.get_session_factory", return_value=session_factory):
+        from andromot.telegram import _unsubscribe_device
+        res = await _unsubscribe_device("6810624345", "device-001")
+
+    assert "Unsubscribed!" in res
+
+
