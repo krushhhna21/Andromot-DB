@@ -1,18 +1,33 @@
+import asyncio
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 
 from .api import router as api_router
 from .config import get_settings
 from .logging import configure_logging
+from .worker import default_processor, process_pending_jobs
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     configure_logging(settings)
-    yield
+
+    worker_task = None
+    if settings.app_env.lower() not in ("test", "testing"):
+        worker_task = asyncio.create_task(
+            process_pending_jobs(default_processor, idle_delay_seconds=2.0)
+        )
+
+    try:
+        yield
+    finally:
+        if worker_task is not None:
+            worker_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await worker_task
 
 
 app = FastAPI(
