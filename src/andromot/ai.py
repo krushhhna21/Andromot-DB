@@ -75,8 +75,8 @@ async def generate_incident_summary(
         return None
 
 
-async def answer_safety_query(user_query: str) -> str | None:
-    """Generate concise, knowledgeable answer for user safety queries via Groq LLM."""
+async def answer_safety_query(user_query: str, telemetry_context: str | None = None) -> str | None:
+    """Generate concise, knowledgeable answer for user safety queries via Groq LLM with optional live telemetry context."""
     settings = get_settings()
     if not settings.groq_enabled or not settings.groq_api_key:
         return None
@@ -87,29 +87,38 @@ async def answer_safety_query(user_query: str) -> str | None:
 
     model = settings.groq_model or "qwen/qwen3.8-27b"
 
+    sys_parts = [
+        "You are Andromot AI, an industrial gas safety and IoT assistant. "
+        "You monitor 8 target hazardous gases: LPG, Methane, Propane, Butane, Hydrogen, Alcohol/Ethanol, "
+        "Carbon Monoxide, and Smoke. "
+        "Standard thresholds:\n"
+        "- Carbon Monoxide: Warning > 35 ppm, Critical > 100 ppm (toxic asphyxiant)\n"
+        "- LPG, Propane, Butane, Methane, Hydrogen: Warning > 10% LEL (or >1000 ppm), Critical > 20% LEL (explosion risk)\n"
+        "- Alcohol/Ethanol: Warning > 200 ppm, Critical > 500 ppm (VOC vapor)\n"
+        "- Smoke: Warning > 200 ppm/index, Critical > 400 ppm/index (fire/combustion)\n"
+    ]
+    if telemetry_context:
+        sys_parts.append(f"Current live sensor telemetry from site:\n{telemetry_context}\n")
+
+    sys_parts.append(
+        "Answer user inquiries concisely, accurately, and politely in 2-4 sentences. "
+        "If asked about current site readings, refer directly to the live sensor telemetry provided above. "
+        "Do not use markdown headers (###). Format output cleanly for Telegram messaging."
+    )
+
     payload = {
         "model": model,
         "messages": [
             {
                 "role": "system",
-                "content": (
-                    "You are Andromot AI, an industrial gas safety and IoT assistant. "
-                    "You monitor 8 target hazardous gases: LPG, Methane, Propane, Butane, Hydrogen, Alcohol/Ethanol, "
-                    "Carbon Monoxide, and Smoke. "
-                    "Standard thresholds:\n"
-                    "- Carbon Monoxide: Warning > 35 ppm, Critical > 100 ppm (toxic asphyxiant)\n"
-                    "- LPG, Propane, Butane, Methane, Hydrogen: Warning > 10% LEL (or >1000 ppm), Critical > 20% LEL (explosion risk)\n"
-                    "- Alcohol/Ethanol: Warning > 200 ppm, Critical > 500 ppm (VOC vapor)\n"
-                    "- Smoke: Warning > 200 ppm/index, Critical > 400 ppm/index (fire/combustion)\n"
-                    "Answer user inquiries concisely, accurately, and politely in 2-4 sentences. "
-                    "Do not use markdown headers (###). Format output cleanly for Telegram messaging."
-                ),
+                "content": "\n".join(sys_parts),
             },
             {"role": "user", "content": user_query},
         ],
         "max_tokens": 250,
         "temperature": 0.3,
     }
+
 
 
     headers = {

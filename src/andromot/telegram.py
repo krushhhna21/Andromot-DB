@@ -248,14 +248,16 @@ async def _get_latest_telemetry_text() -> str:
             if latest.measurements:
                 for m in latest.measurements:
                     cal = f" ({m.calibration_status})" if m.calibration_status else ""
-                    lines.append(f"• <b>{m.gas_type}:</b> {m.value} {m.unit}{cal}")
+                    val_clean = f"{float(m.value):g}"
+                    lines.append(f"• <b>{m.gas_type}:</b> {val_clean} {m.unit}{cal}")
             else:
                 lines.append("• <i>No gas measurements recorded</i>")
 
             if latest.environment_measurements:
                 lines.extend(["", "<b>Environment:</b>"])
                 for em in latest.environment_measurements:
-                    lines.append(f"• <b>{em.measurement_type}:</b> {em.value} {em.unit}")
+                    em_clean = f"{float(em.value):g}"
+                    lines.append(f"• <b>{em.measurement_type}:</b> {em_clean} {em.unit}")
 
             health = latest.sensor_health or {}
             if health:
@@ -301,8 +303,10 @@ async def handle_incoming_telegram_message(message: dict[str, Any]) -> None:
         return
 
     first_name = chat.get("first_name", "there")
-    cmd = text.split()[0].lower() if text.startswith("/") else text.lower()
+    norm_text = text.lower().strip()
+    cmd = norm_text.split()[0] if norm_text.startswith("/") else norm_text
 
+    # 1. Welcome / Help / Greeting
     if cmd in ("/start", "/help", "help", "hi", "hello", "ii", "hiii", "hey"):
         reply = (
             f"👋 Hello <b>{first_name}</b>!\n\n"
@@ -320,7 +324,21 @@ async def handle_incoming_telegram_message(message: dict[str, Any]) -> None:
         await send_telegram_message(reply, chat_id=chat_id)
         return
 
-    if cmd in ("/gases", "/thresholds"):
+    # 2. Latest Telemetry (supports /latest or natural English inquiries)
+    if cmd == "/latest" or any(p in norm_text for p in (
+        "latest reading", "latest readings", "current reading", "current readings",
+        "show reading", "show readings", "get reading", "get readings",
+        "what are the readings", "what is the reading", "what are the latest readings",
+        "sensor data", "gas levels", "current level", "current levels"
+    )):
+        telemetry_text = await _get_latest_telemetry_text()
+        await send_telegram_message(telemetry_text, chat_id=chat_id)
+        return
+
+    # 3. Gases / Thresholds
+    if cmd in ("/gases", "/thresholds") or any(p in norm_text for p in (
+        "what gases", "gas list", "show gases", "thresholds", "alarm limits", "danger values", "trigger values"
+    )):
         gases_text = (
             "🧪 <b>Target Gases & Alarm Thresholds:</b>\n\n"
             "• <b>Carbon Monoxide (CO):</b>\n"
@@ -344,24 +362,25 @@ async def handle_incoming_telegram_message(message: dict[str, Any]) -> None:
         await send_telegram_message(gases_text, chat_id=chat_id)
         return
 
-    if cmd == "/status":
+    # 4. Status
+    if cmd == "/status" or any(p in norm_text for p in ("system status", "health", "how is system", "platform status")):
         status_text = await _get_status_text()
         await send_telegram_message(status_text, chat_id=chat_id)
         return
 
-    if cmd == "/latest":
-        telemetry_text = await _get_latest_telemetry_text()
-        await send_telegram_message(telemetry_text, chat_id=chat_id)
-        return
-
-
-    if cmd == "/devices":
+    # 5. Devices
+    if cmd == "/devices" or any(p in norm_text for p in ("show devices", "which devices", "list devices")):
         devices_text = await _get_devices_text()
         await send_telegram_message(devices_text, chat_id=chat_id)
         return
 
-    # Freeform question or text: invoke Groq AI
-    ai_answer = await answer_safety_query(text)
+    # 6. Freeform question or text: invoke Groq AI with live telemetry context
+    try:
+        telemetry_context = await _get_latest_telemetry_text()
+    except Exception:
+        telemetry_context = None
+
+    ai_answer = await answer_safety_query(text, telemetry_context=telemetry_context)
     if ai_answer:
         await send_telegram_message(ai_answer, chat_id=chat_id)
     else:
@@ -369,6 +388,7 @@ async def handle_incoming_telegram_message(message: dict[str, Any]) -> None:
             f"Received: \"{text}\"\n\nType <code>/help</code> for commands or <code>/latest</code> to see sensor readings.",
             chat_id=chat_id,
         )
+
 
 
 async def poll_telegram_updates(stop_event: asyncio.Event | None = None) -> None:
